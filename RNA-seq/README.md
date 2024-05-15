@@ -2,18 +2,27 @@
 
 This pipeline is built to perform RNA-seq processing and prepare necessary data for alternative splicing detection under python. 
 
-## STAR alignment ##
-`STAR_align.py` will automatically perform trimming and alignment for bulk RNA-seq. 
+## Reads alignment ##
+`STAR_align.py` will automatically perform trimming, alignment, sorting and indexing for bulk RNA-seq. 
 
 ### Dependencies: 
 
-`fastp`
+`fastp 0.20.0`
 
-`STAR`
+
+`STAR 2.7.10a`
 
 ### Usage:
 
-`STAR_align.py` has the following arguments:
+Example code: 
+```
+python /home/usr/script/STAR_align.py -i /home/data/fastq \
+-o /home/usr/data/bam --pair --star_path STAR --star_index /home/usr/ref/star_index/GRCh38/gencode40 \
+--gtf /home/usr/ref/gencode.v40.annotation.gtf --SAMtype 'BAM SortedByCoordinate'
+```
+
+#### Arguments
+`STAR_align.py` takes following arguments:
 
 `--input`,`-i`: Enter input directory. This directory is the one store your raw `fastq` or `fastq.gz` files. 
 
@@ -34,7 +43,7 @@ This pipeline is built to perform RNA-seq processing and prepare necessary data 
 
 ### Description
 
-This script will generate folders as follow:
+This script will automatically perform trimming, alignment, sorting and indexing for bulk RNA-seq data. 
 
 If your input directory is `/home/usr/data/fastq/`: 
 
@@ -43,12 +52,12 @@ Trimmed `*_trimmed.fastq.gz` files will be stored under the same directory of th
 Based on different flags you give to `--SAMtype`, it will create a folder beside your input directory named either `bam` or `sam`. 
 
 For example, if we use `--SAMtype BAM Unsorted`, you will find your bam files stored under `/home/usr/data/bam/bam_unsorted/`.
-Another folder named `/tmp/` will be created to store temporary shell scripts for trimming and alignment. You can use `--keep` to keep those files. 
-By default, these files will be deleted. 
+Another folder named `/tmp/` will be created to store temporary shell scripts for trimming and alignment. 
 
-After alignment, you may need to perform sorting and indexing for SAM/BAM. Run `sort_index.py` as below.
+If you choose `SAM` or `BAM Unsorted`, this program will automatically perform sorting and indexing. `*.sorted.bam` and `*.bai` will be stored in the same folder. 
 
---- 
-## Sort and index ##
-
+#### Special note: 
+You can add flag `--keep` to keep shell scripts stored in `/tmp`. By default, these files will be deleted.
+If you did not delete the `/tmp` folder that holds shell scripts of all the samples, this program will fail to detect file existence from `fastp` and `STAR`. 
+Therefore, if you rerun the script for some reasons, PLEASE remember to delete the `/tmp` in prior. 
 
