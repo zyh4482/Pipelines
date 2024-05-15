@@ -6,8 +6,8 @@ import shutil
 import argparse
 import sys
 import subprocess
-import pandas as pd
 import glob
+import pysam
 #import multiprocessing
 
 # Define the parser
@@ -15,7 +15,7 @@ parser = argparse.ArgumentParser(description='Perform STAR alignment for RNA-seq
 parser.add_argument('--input', '-i', action="store",dest="input", help="Enter Input directory", required=True)
 parser.add_argument('--out', '-o', action="store",dest="output", help="Enter Output directory", required=True)
 parser.add_argument('--pair', '-p', action="store_true",dest="paired", 
-                    help="Paired reads or not", required=True)
+                    help="Paired reads or not", required=False) # If this flag is not set, it will be False. Reads will be taken as single-end reads
 parser.add_argument('--gtf', '-g', action="store",dest="gtf", help="Enter GTF directory", required=True)
 parser.add_argument('--star_path', '-s', action="store",dest="star_path", help="Enter STAR executable directory", required=True)
 parser.add_argument('--star_index', '-I', action="store",dest="star_index", help="Enter STAR Index directory", required=True)
@@ -23,7 +23,7 @@ parser.add_argument('--SAMtype', '-t', action="store",dest="samtype",
                     choices = ['BAM Unsorted', 'BAM SortedByCoordinate', 'SAM'],
                     help="Decide which type of aligned file as output", required=True)
 parser.add_argument('--keep', '-k', action="store_true",dest="keep", 
-                    help="Keep tmp scripts in tmp folder", required=True)
+                    help="Keep tmp scripts in tmp folder. Default: False", required=False) # If this flag is not set, it will be False. tmp folder will be removed
 
 args = parser.parse_args()
 
@@ -185,14 +185,55 @@ def main(input_dir, output_dir, paired, gtf, star_path, star_index, SAMtype, kee
     # Shell script is stored in the tmp folder under the given output directory
     
     for sample_ID in names:
-        fastp_trim(input_dir, paired, sample_ID, output_dir)
         
         sample_dir = pathlib.Path(sam_dir) / sample_ID
         sample_dir.mkdir(parents=True, exist_ok=True)
         
-        STAR_align(input_dir, sample_ID, output_dir, gtf, 
-                   star_path, star_index, paired, SAMtype)
-    
+        if paired:
+            check_trim = glob.glob('{}/{}_1_trimmed.fastq.gz'.format(input_dir,sample_ID))
+        else:
+            check_trim = glob.glob('{}/{}_trimmed.fastq.gz'.format(input_dir,sample_ID))
+            
+        check_bam = glob.glob('{}/*.bam'.format(sample_dir))
+        
+        if not check_trim:
+            print("Performing fastp trimming and STAR alignment for {}......\n".format(sample_ID))
+            fastp_trim(input_dir, paired, sample_ID, output_dir)
+            STAR_align(input_dir, sample_ID, output_dir, gtf, star_path, star_index, paired, SAMtype)
+        
+        elif not check_bam:
+            print("Trimming has been performed.Performing STAR alignment for {}......\n".format(sample_ID)) 
+            STAR_align(input_dir, sample_ID, output_dir, gtf, star_path, star_index, paired, SAMtype)
+        
+        else:
+            print("Fastp trimming and STAR alignment have been performed for {}.\n".format(sample_ID))
+            continue   
+
+        '''
+        if SAMtype == 'BAM Unsorted':
+            bam_file = pathlib.Path(sample_dir) / '{}Aligned.out.bam'.format(sample_ID)
+            print("Need sorting first! Perform sorting using samtools......\n")
+            
+            pysam.sort("-@" "16", "-m", "2G","-o", bam_file.replace(".bam", ".sorted.bam"), bam_file)
+            
+            bam_file_sort = bam_file.replace(".bam", ".sorted.bam")
+            pysam.index(bam_file_sort, bam_file_sort.replace(".sorted.bam", ".sorted.bai"),"-b","-@","16")
+            
+        elif SAMtype == 'SAM':
+            bam_file = pathlib.Path(sample_dir) / '{}Aligned.out.sam'.format(sample_ID)
+            print("Need sorting first! Perform sorting using samtools......\n")
+            
+            pysam.sort("-@" "16", "-m", "2G","-o", bam_file.replace(".sam", ".sorted.sam"), bam_file)
+            
+            bam_file_sort = bam_file.replace(".sam", ".sorted.sam")
+            pysam.index(bam_file_sort, bam_file_sort.replace(".sorted.sam", ".sorted.bai"),"-b","-@","16")
+            
+        elif SAMtype == 'BAM SortedByCoordinate':
+            bam_file = pathlib.Path(sample_dir) / '{}Aligned.sortedByCoord.out.bam'.format(sample_ID)
+            print("BAM has been sorted by STAR. Perform indexing using samtools......\n")
+            pysam.index(bam_file, bam_file.replace(".bam", ".bai"),"-b","-@","16")
+        '''
+
     # Find all fastp_trim shell scripts and execute them
     fastp_trim_scripts = glob.glob('{}/fastp_trim*.sh'.format(work_dir))
     procs = [ subprocess.Popen("bash "+i, shell=True) for i in fastp_trim_scripts]
@@ -205,6 +246,30 @@ def main(input_dir, output_dir, paired, gtf, star_path, star_index, SAMtype, kee
     procs = [ subprocess.Popen("bash "+i, shell=True) for i in STAR_align_scripts]
     for p in procs:
         p.wait()
+        
+    for sample_ID in names:
+        if SAMtype == 'BAM Unsorted':
+            bam_file = pathlib.Path(sample_dir) / '{}Aligned.out.bam'.format(sample_ID)
+            print("Need sorting first! Perform sorting using samtools......\n")
+            
+            pysam.sort("-@" "16", "-m", "2G","-o", bam_file.replace(".bam", ".sorted.bam"), bam_file)
+            
+            bam_file_sort = bam_file.replace(".bam", ".sorted.bam")
+            pysam.index(bam_file_sort, bam_file_sort.replace(".sorted.bam", ".sorted.bai"),"-b","-@","16")
+            
+        elif SAMtype == 'SAM':
+            bam_file = pathlib.Path(sample_dir) / '{}Aligned.out.sam'.format(sample_ID)
+            print("Need sorting first! Perform sorting using samtools......\n")
+            
+            pysam.sort("-@" "16", "-m", "2G","-o", bam_file.replace(".sam", ".sorted.sam"), bam_file)
+            
+            bam_file_sort = bam_file.replace(".sam", ".sorted.sam")
+            pysam.index(bam_file_sort, bam_file_sort.replace(".sorted.sam", ".sorted.bai"),"-b","-@","16")
+            
+        elif SAMtype == 'BAM SortedByCoordinate':
+            bam_file = pathlib.Path(sample_dir) / '{}Aligned.sortedByCoord.out.bam'.format(sample_ID)
+            print("BAM has been sorted by STAR. Perform indexing using samtools......\n")
+            pysam.index(bam_file, bam_file.replace(".bam", ".bai"),"-b","-@","16")    
     
     # Remove tmp folder if keep is False
     if not keep:
