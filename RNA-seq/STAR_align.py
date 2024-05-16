@@ -1,5 +1,6 @@
 # !/usr/bin/env python
 #_*_coding:utf-8 _*_
+import multiprocessing.pool
 import pathlib
 import os
 import shutil
@@ -8,7 +9,8 @@ import sys
 import subprocess
 import glob
 import pysam
-#import multiprocessing
+import multiprocessing
+from functools import partial
 
 # Define the parser
 parser = argparse.ArgumentParser(description='Perform STAR alignment for RNA-seq')
@@ -32,26 +34,22 @@ if len(sys.argv)==1:
     parser.print_help(sys.stderr)
     sys.exit(1)
 
-#pathlib.Path(args.output+'/tmp').mkdir(parents=True, exist_ok=True)
-
-
 # Module:: Generate bash command
-def create_bash(file_name, command):
-    with open(file_name, 'w') as file:
+def create_bash(script_name, command):
+    with open(script_name, 'w') as file:
         file.write("#!/bin/bash\n")
         file.write(command)
     file.close()
     
-'''
 # Module:: Execute bash command
-def submit_job(file_name):
-    status, output = subprocess.getstatusoutput("bash {}".format(file_name))
+def execute_command(script_name):
+    status, output = subprocess.getstatusoutput("bash {}".format(script_name))
     if status == 0:
-        print("{} ({})".format(output, file_name))
+        print("{} ({})".format(output, script_name))
         return output.split()[-1]
     else:
-        print("Error when executing the following command: {} {} {}".format(status, output, file_name))
-'''
+        print("Error when executing the following command: {} {} {}".format(status, output, script_name))
+
 
 # Module:: Get sample ID of Fastq files
 def get_sample_ID(input_dir, paired):
@@ -104,8 +102,8 @@ def fastp_trim(input_dir, paired, sample_ID,output_dir):
                 #print("Error: {} does not exist".format(file)) # No need to print this
                 continue
           
-    return create_bash("{}/tmp/fastp_trim_{}.sh".format(output_dir,sample_ID),command)
-    #return submit_job("{}/tmp/fastp_trim_{}.sh".format(output_dir,prefix))
+    create_bash("{}/tmp/fastp_trim_{}.sh".format(output_dir,sample_ID),command)
+    return execute_command("{}/tmp/fastp_trim_{}.sh".format(output_dir,sample_ID))
 
 # Module:: STAR alignment
 def STAR_align(input_dir, sample_ID, output_dir, gtf, 
@@ -113,7 +111,7 @@ def STAR_align(input_dir, sample_ID, output_dir, gtf,
     
     if paired:
         command = "{} --runMode alignReads ".format(star_path) 
-        command += "--runThreadN 48 --genomeDir {} ".format(star_index)
+        command += "--runThreadN 24 --genomeDir {} ".format(star_index)
         command += "--readFilesCommand zcat --twopassMode Basic --outSAMtype {} ".format(samtype)
         command += "--sjdbGTFfile {} ".format(gtf)
         command += "--outSAMstrandField intronMotif " # Important XS tag for alternative splicing analysis
@@ -133,7 +131,7 @@ def STAR_align(input_dir, sample_ID, output_dir, gtf,
 
     else:
         command = "{} --runMode alignReads ".format(star_path) 
-        command += "--runThreadN 48 --genomeDir {} ".format(star_index)
+        command += "--runThreadN 24 --genomeDir {} ".format(star_index)
         command += "--readFilesCommand zcat --twopassMode Basic --outSAMtype {} ".format(samtype)
         command += "--sjdbGTFfile {} ".format(gtf)
         command += "--outSAMstrandField intronMotif " # Important XS tag for alternative splicing analysis
@@ -150,14 +148,52 @@ def STAR_align(input_dir, sample_ID, output_dir, gtf,
             command += "--outFileNamePrefix {}/sam/{}/{} ".format(output_dir, sample_ID, sample_ID)
         
         command += "--outSAMattrRGline ID:{} SM:{} LB:{} PL:ILLUMINA ".format(sample_ID, sample_ID, sample_ID)
+        
+    create_bash("{}/tmp/STAR_align_{}.sh".format(output_dir,sample_ID),command)
+    return execute_command("{}/tmp/STAR_align_{}.sh".format(output_dir,sample_ID))
 
-    return create_bash("{}/tmp/STAR_align_{}.sh".format(output_dir,sample_ID),command)
-    #return submit_job("{}/tmp/STAR_align_{}.sh".format(output_dir,sample_ID))
-
-
-# Module:: Main function
-def main(input_dir, output_dir, paired, gtf, star_path, star_index, SAMtype, keep):
+# Module:: Sort and index BAM files
+def sort_index_bam(output_dir, sample_ID, SAMtype):
     
+    if SAMtype == 'BAM Unsorted':
+        sam_dir = pathlib.Path(output_dir) / 'bam_unsorted'
+        sample_dir = pathlib.Path(sam_dir) / sample_ID
+        bam_file = pathlib.Path(sample_dir) / '{}Aligned.out.bam'.format(sample_ID)
+        bam_file_sort = bam_file.with_suffix(".sorted.bam")
+        bai_file = bam_file_sort.with_suffix(".bai")
+        print("Need sorting first! Perform sorting using samtools......\n")
+        
+        command = "samtools sort -@ 16 -m 2G -o {} {} && ".format(bam_file_sort, bam_file)
+        command += "samtools index -b -@ 16 {} {}".format(bam_file_sort, bai_file)
+        
+    elif SAMtype == 'SAM':
+        sam_dir = pathlib.Path(output_dir) / 'sam'
+        sample_dir = pathlib.Path(sam_dir) / sample_ID
+        bam_file = pathlib.Path(sample_dir) / '{}Aligned.out.sam'.format(sample_ID)
+        bam_file_sort = bam_file.with_suffix(".sorted.sam")
+        bai_file = bam_file_sort.with_suffix(".bai")
+        print("Need sorting first! Perform sorting using samtools......\n")
+        
+        command = "samtools sort -@ 16 -m 2G -o {} {} && ".format(bam_file_sort, bam_file)
+        command += "samtools index -b -@ 16 {} {}".format(bam_file_sort, bai_file)
+             
+    elif SAMtype == 'BAM SortedByCoordinate':
+        sam_dir = pathlib.Path(output_dir) / 'bam_sorted'
+        sample_dir = pathlib.Path(sam_dir) / sample_ID
+        bam_file = pathlib.Path(sample_dir) / '{}Aligned.sortedByCoord.out.bam'.format(sample_ID)
+        bai_file = pathlib.Path(bam_file.with_suffix(".bai"))
+        print("BAM has been sorted by STAR. Perform indexing using samtools......\n")
+        command = "samtools index -b -@ 16 {} {} ".format(bam_file, bai_file)
+        
+
+    create_bash("{}/tmp/sort_index_{}.sh".format(output_dir,sample_ID),command)
+    return execute_command("{}/tmp/sort_index_{}.sh".format(output_dir,sample_ID))
+
+
+# Module:: Process each sample
+def process_sample(input_dir, sample_ID, output_dir, gtf, 
+                   star_path, star_index, paired, SAMtype):
+        
     # Create directory to store verbose tmp scripts
     work_dir = pathlib.Path(output_dir) / 'tmp'
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -174,110 +210,77 @@ def main(input_dir, output_dir, paired, gtf, star_path, star_index, SAMtype, kee
     elif SAMtype == 'SAM':
         sam_dir = pathlib.Path(output_dir) / 'sam'
         sam_dir.mkdir(parents=True, exist_ok=True)
+    #print(sam_dir)
+    sample_dir = pathlib.Path(sam_dir) / sample_ID
+    sample_dir.mkdir(parents=True, exist_ok=True)
+    #print(sample_dir)
     
-    #star_path = 'STAR' # Manually define the path to STAR # If install with conda, just type-in STAR
-    #star_index = '/home/zyh/ref/star_index/GRCh38'
-    #gtf = '/home/zyh/ref/gencode.v40.annotation.gtf'
+    # Check if trimming is performed
+    if paired:
+        check_trim = glob.glob('{}/{}_1_trimmed.fastq.gz'.format(input_dir,sample_ID))
+    else:
+        check_trim = glob.glob('{}/{}_trimmed.fastq.gz'.format(input_dir,sample_ID))
     
+    # Check if alignment is performed
+    check_bam = glob.glob('{}/*.bam'.format(sample_dir))
+    '''
+    # Check if sort is performed
+    if SAMtype == 'BAM Unsorted':
+        check_sorted_bam = glob.glob('{}/*.sorted.bam'.format(sample_dir))
+    
+    elif SAMtype == 'BAM SortedByCoordinate':
+        check_sorted_bam = check_bam
+    
+    elif SAMtype == 'SAM':
+        check_sorted_bam = glob.glob('{}/*.sorted.sam'.format(sample_dir))
+    '''
+    #print((not check_trim), (not check_bam))
+    if not check_trim:
+        print("Performing fastp trimming and STAR alignment for {}......\n".format(sample_ID))
+        fastp_trim(input_dir, paired, sample_ID, output_dir)
+        STAR_align(input_dir, sample_ID, output_dir, gtf, star_path, star_index, paired, SAMtype)
+        #sort_index_bam(output_dir, sample_ID, SAMtype)
+        
+    elif not check_bam:
+        print("Trimming has been performed. Performing STAR alignment for {}......\n".format(sample_ID)) 
+        STAR_align(input_dir, sample_ID, output_dir, gtf, star_path, star_index, paired, SAMtype)
+        #sort_index_bam(output_dir, sample_ID, SAMtype)
+    '''            
+    elif not check_sorted_bam:
+        print("Fastp trimming and STAR alignment have been performed for {}.\n".format(sample_ID))
+        sort_index_bam(output_dir, sample_ID, SAMtype)
+    
+    else:    
+        print("Fastp trimming, STAR alignment and Sorting have been performed for {}.\n".format(sample_ID))
+    '''
+    # After alignment, perform sorting and indexing for SAM/BAM files. 
+    sort_index_bam(output_dir, sample_ID, SAMtype)
+
+
+
+# Main Module:: RNA-seq pipeline
+def rna_seq_pipe(input_dir, output_dir, paired, gtf, star_path, star_index, SAMtype, keep):
+    # Get iteratable sample names 
     names = get_sample_ID(input_dir, paired) # Example output: names = ['SRR123', 'SRR234']
     
-    # For each sample, create shell scripts for fastp trimming and STAR alignment
-    # Shell script is stored in the tmp folder under the given output directory
-    
-    for sample_ID in names:
-        
-        sample_dir = pathlib.Path(sam_dir) / sample_ID
-        sample_dir.mkdir(parents=True, exist_ok=True)
-        
-        if paired:
-            check_trim = glob.glob('{}/{}_1_trimmed.fastq.gz'.format(input_dir,sample_ID))
-        else:
-            check_trim = glob.glob('{}/{}_trimmed.fastq.gz'.format(input_dir,sample_ID))
-            
-        check_bam = glob.glob('{}/*.bam'.format(sample_dir))
-        
-        if not check_trim:
-            print("Performing fastp trimming and STAR alignment for {}......\n".format(sample_ID))
-            fastp_trim(input_dir, paired, sample_ID, output_dir)
-            STAR_align(input_dir, sample_ID, output_dir, gtf, star_path, star_index, paired, SAMtype)
-        
-        elif not check_bam:
-            print("Trimming has been performed.Performing STAR alignment for {}......\n".format(sample_ID)) 
-            STAR_align(input_dir, sample_ID, output_dir, gtf, star_path, star_index, paired, SAMtype)
-        
-        else:
-            print("Fastp trimming and STAR alignment have been performed for {}.\n".format(sample_ID))
-            continue   
+    # Start multi-processing for fastp trimming and STAR alignment
+    pool = multiprocessing.Pool(processes=4)
+    for name in names:  
+        pool.apply_async(process_sample, args=(input_dir, name, output_dir, gtf, 
+                                               star_path, star_index, paired, SAMtype))
+    print('Multi-tasks for RNA-seq pipeline in progress...\n')
+    pool.close()
+    pool.join()
+    print('Pipeline completed!')
 
-        '''
-        if SAMtype == 'BAM Unsorted':
-            bam_file = pathlib.Path(sample_dir) / '{}Aligned.out.bam'.format(sample_ID)
-            print("Need sorting first! Perform sorting using samtools......\n")
-            
-            pysam.sort("-@" "16", "-m", "2G","-o", bam_file.replace(".bam", ".sorted.bam"), bam_file)
-            
-            bam_file_sort = bam_file.replace(".bam", ".sorted.bam")
-            pysam.index(bam_file_sort, bam_file_sort.replace(".sorted.bam", ".sorted.bai"),"-b","-@","16")
-            
-        elif SAMtype == 'SAM':
-            bam_file = pathlib.Path(sample_dir) / '{}Aligned.out.sam'.format(sample_ID)
-            print("Need sorting first! Perform sorting using samtools......\n")
-            
-            pysam.sort("-@" "16", "-m", "2G","-o", bam_file.replace(".sam", ".sorted.sam"), bam_file)
-            
-            bam_file_sort = bam_file.replace(".sam", ".sorted.sam")
-            pysam.index(bam_file_sort, bam_file_sort.replace(".sorted.sam", ".sorted.bai"),"-b","-@","16")
-            
-        elif SAMtype == 'BAM SortedByCoordinate':
-            bam_file = pathlib.Path(sample_dir) / '{}Aligned.sortedByCoord.out.bam'.format(sample_ID)
-            print("BAM has been sorted by STAR. Perform indexing using samtools......\n")
-            pysam.index(bam_file, bam_file.replace(".bam", ".bai"),"-b","-@","16")
-        '''
-
-    # Find all fastp_trim shell scripts and execute them
-    fastp_trim_scripts = glob.glob('{}/fastp_trim*.sh'.format(work_dir))
-    procs = [ subprocess.Popen("bash "+i, shell=True) for i in fastp_trim_scripts]
-    for p in procs:
-        p.wait()
-        
-    # Find all STAR_align shell scripts and execute them
-    STAR_align_scripts = glob.glob('{}/STAR_align*.sh'.format(work_dir))
-    #print([i for i in STAR_align_scripts])
-    procs = [ subprocess.Popen("bash "+i, shell=True) for i in STAR_align_scripts]
-    for p in procs:
-        p.wait()
-        
-    for sample_ID in names:
-        if SAMtype == 'BAM Unsorted':
-            bam_file = pathlib.Path(sample_dir) / '{}Aligned.out.bam'.format(sample_ID)
-            print("Need sorting first! Perform sorting using samtools......\n")
-            
-            pysam.sort("-@" "16", "-m", "2G","-o", bam_file.replace(".bam", ".sorted.bam"), bam_file)
-            
-            bam_file_sort = bam_file.replace(".bam", ".sorted.bam")
-            pysam.index(bam_file_sort, bam_file_sort.replace(".sorted.bam", ".sorted.bai"),"-b","-@","16")
-            
-        elif SAMtype == 'SAM':
-            bam_file = pathlib.Path(sample_dir) / '{}Aligned.out.sam'.format(sample_ID)
-            print("Need sorting first! Perform sorting using samtools......\n")
-            
-            pysam.sort("-@" "16", "-m", "2G","-o", bam_file.replace(".sam", ".sorted.sam"), bam_file)
-            
-            bam_file_sort = bam_file.replace(".sam", ".sorted.sam")
-            pysam.index(bam_file_sort, bam_file_sort.replace(".sorted.sam", ".sorted.bai"),"-b","-@","16")
-            
-        elif SAMtype == 'BAM SortedByCoordinate':
-            bam_file = pathlib.Path(sample_dir) / '{}Aligned.sortedByCoord.out.bam'.format(sample_ID)
-            print("BAM has been sorted by STAR. Perform indexing using samtools......\n")
-            pysam.index(bam_file, bam_file.replace(".bam", ".bai"),"-b","-@","16")    
-    
     # Remove tmp folder if keep is False
+    work_dir = pathlib.Path(output_dir) / 'tmp'
+    
     if not keep:
         shutil.rmtree(work_dir)
 
-
 # Execute the main function
-main(input_dir=args.input, output_dir=args.output, 
-     paired=args.paired, gtf=args.gtf, star_path=args.star_path, 
-     star_index=args.star_index, SAMtype=args.samtype, keep=args.keep)
+rna_seq_pipe(args.input, args.output, args.paired, args.gtf, 
+             args.star_path, args.star_index, args.samtype, args.keep)
+
 # End of the script
