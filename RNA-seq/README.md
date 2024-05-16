@@ -14,6 +14,13 @@ Before starting, please install the dependencies. Recommended installation using
 
 `STAR 2.7.10a`
 
+### Memory requirement:
+This script is calling 4 processes at a time. STAR requires loading genome reference, which will be memory consuming.
+So far I did not optimize the memory usage. For human genome, each process may consume around 35 to 45 GB. Therefore, the total memory should be > 120 GB. 
+
+Please adjust the multiprocessing threads in case you need to adpat to your machine. 
+At line 267, change `pool = multiprocessing.Pool(processes=x)`, where x is your preferred number. 
+
 ### Usage:
 
 Example code: 
