@@ -5,6 +5,8 @@ This pipeline is built to perform RNA-seq processing and prepare necessary data 
 ## Reads alignment ##
 `STAR_align.py` will automatically perform trimming, alignment, sorting and indexing for bulk RNA-seq. 
 
+Before starting, please install the dependencies. Recommended installation using `conda install`. 
+
 ### Dependencies: 
 
 `fastp 0.20.0`
@@ -60,4 +62,14 @@ If you choose `SAM` or `BAM Unsorted`, this program will automatically perform s
 You can add flag `--keep` to keep shell scripts stored in `/tmp`. By default, these files will be deleted.
 If you did not delete the `/tmp` folder that holds shell scripts of all the samples, this program will fail to detect file existence from `fastp` and `STAR`. 
 Therefore, if you rerun the script for some reasons, PLEASE remember to delete the `/tmp` in prior. 
+
+In the script, I set the threads number of STAR alignment to 24, with a maximum multi-task process of 4, which will be fit to a 96-core machine. 
+If you wish to change this performance, please revise line 114 and 134 `--runThreadN x`, where x is your preferred number. 
+
+In addition, if you choose the flag `BAM SortedByCoordinate`, one should be noted that on the Unix system, `ulimit` will be default as 1024. 
+If `STAR` take this flag, and if `the number of threads * 50` > `ulimit -n`, it will cause error. 
+To overcome this, please use `BAM Unsorted` flag or manually change the ulimit number to 65535. 
+
+An example reference link for how to change the ulimit is shown here: 
+https://superuser.com/questions/1200539/cannot-increase-open-file-limit-past-4096-ubuntu
 
